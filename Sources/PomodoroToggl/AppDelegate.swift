@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     let webView = WKWebView(frame: .zero, configuration: config)
+    pomodoroBridge.webView = webView
     webView.translatesAutoresizingMaskIntoConstraints = false
 
     let container = NSView(frame: window.contentLayoutRect)

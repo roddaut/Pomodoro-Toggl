@@ -48,7 +48,8 @@ final class DeskReminderController: NSObject {
 
     let inSession =
       connected
-      && (phase == "work" || phase == "short_break" || phase == "long_break")
+      && (phase == "work" || phase == "before_break" || phase == "short_break"
+        || phase == "long_break")
     if inSession {
       activeSeconds = 0
       reminderSent = false

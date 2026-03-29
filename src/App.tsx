@@ -5,7 +5,12 @@ import {
   fetchMe,
   type TogglMe,
 } from './lib/toggl'
-import { postNativePhase } from './lib/nativeBridge'
+import {
+  getLoginItemStatus,
+  isNativeShell,
+  postNativePhase,
+  setLoginItemEnabled,
+} from './lib/nativeBridge'
 import { clearToken, loadToken, saveToken } from './lib/storage'
 import {
   startBreakOceanSound,
@@ -15,8 +20,14 @@ import {
   playWorkCompleteSound,
   prepareWorkAudio,
 } from './lib/workCompleteSound'
+import { playTickSound } from './lib/tickSound'
 
-type Phase = 'idle' | 'work' | 'short_break' | 'long_break'
+type Phase =
+  | 'idle'
+  | 'work'
+  | 'before_break'
+  | 'short_break'
+  | 'long_break'
 
 const DEFAULT_WORK = 25 * 60
 const DEFAULT_SHORT = 5 * 60
@@ -28,8 +39,13 @@ function formatClock(totalSeconds: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+function formatOvertime(totalSeconds: number): string {
+  return `+${formatClock(totalSeconds)}`
+}
+
+/** Full ISO 8601 (ms kept). Toggl validates `duration` against `stop − start`; rounding away ms made both timestamps the same second for short spans. */
 function toIso(d: Date): string {
-  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
+  return d.toISOString()
 }
 
 function splitMinSec(totalSeconds: number) {
@@ -126,6 +142,15 @@ export default function App() {
   const workStartRef = useRef<number | null>(null)
   const zeroHandledRef = useRef(false)
   const [syncNote, setSyncNote] = useState<string | null>(null)
+  const [overtimeSec, setOvertimeSec] = useState(0)
+  const [pendingBreak, setPendingBreak] = useState<'short_break' | 'long_break'>(
+    'short_break',
+  )
+
+  const [openAtLogin, setOpenAtLogin] = useState(false)
+  const [loginItemNeedsApproval, setLoginItemNeedsApproval] = useState(false)
+  const [loginItemError, setLoginItemError] = useState<string | null>(null)
+  const [loginItemBusy, setLoginItemBusy] = useState(false)
 
   const workspaces = me?.workspaces ?? []
   const projectsForWs = useMemo(() => {
@@ -204,13 +229,28 @@ export default function App() {
   }, [phase, token])
 
   useEffect(() => {
-    if (phase === 'short_break' || phase === 'long_break') {
-      startBreakOceanSound()
-    } else {
-      stopBreakOceanSound()
-    }
+    if (!isNativeShell()) return
+    const ac = new AbortController()
+    void (async () => {
+      try {
+        const d = await getLoginItemStatus(ac.signal)
+        setOpenAtLogin(d.enabled)
+        setLoginItemNeedsApproval(Boolean(d.requiresApproval))
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        // Bridge not ready or native error — leave defaults; avoid noisy timeout in UI
+      }
+    })()
+    return () => ac.abort()
+  }, [])
+
+  useEffect(() => {
+    const shouldOcean =
+      (phase === 'short_break' || phase === 'long_break') && remaining > 0
+    if (shouldOcean) startBreakOceanSound()
+    else stopBreakOceanSound()
     return () => stopBreakOceanSound()
-  }, [phase])
+  }, [phase, remaining])
 
   const logSession = useCallback(
     async (startedAt: number, endedAt: number) => {
@@ -218,9 +258,12 @@ export default function App() {
         setSyncNote('Skipped: connect Toggl and pick a workspace.')
         return
       }
-      const duration = Math.max(1, Math.round((endedAt - startedAt) / 1000))
       const start = new Date(startedAt)
       const stop = new Date(endedAt)
+      const duration = Math.max(
+        1,
+        Math.round((stop.getTime() - start.getTime()) / 1000),
+      )
       const desc =
         description.trim() ||
         `Pomodoro (${Math.round(duration / 60)} min)`
@@ -244,16 +287,42 @@ export default function App() {
   )
 
   useEffect(() => {
-    if (phase !== 'work' && phase !== 'short_break' && phase !== 'long_break')
-      return
+    if (phase === 'before_break') {
+      const id = window.setInterval(() => {
+        setOvertimeSec((o) => o + 1)
+        playTickSound()
+      }, 1000)
+      return () => window.clearInterval(id)
+    }
+    if (phase === 'work') {
+      const id = window.setInterval(() => {
+        setRemaining((r) => {
+          if (r <= 1) return 0
+          return r - 1
+        })
+      }, 1000)
+      return () => window.clearInterval(id)
+    }
+    if (phase === 'short_break' || phase === 'long_break') {
+      const id = window.setInterval(() => {
+        setRemaining((r) => {
+          if (r <= 1) return 0
+          return r - 1
+        })
+      }, 1000)
+      return () => window.clearInterval(id)
+    }
+  }, [phase])
+
+  useEffect(() => {
+    if (phase !== 'short_break' && phase !== 'long_break') return
+    if (remaining > 0) return
     const id = window.setInterval(() => {
-      setRemaining((r) => {
-        if (r <= 1) return 0
-        return r - 1
-      })
+      setOvertimeSec((o) => o + 1)
+      playTickSound()
     }, 1000)
     return () => window.clearInterval(id)
-  }, [phase])
+  }, [phase, remaining])
 
   useEffect(() => {
     if (remaining !== 0) {
@@ -271,15 +340,16 @@ export default function App() {
       void logSession(start, end)
       const next =
         (pomosUntilLong + 1) % 4 === 0 ? 'long_break' : 'short_break'
+      setPendingBreak(next)
       setPomosUntilLong((n) => n + 1)
-      setPhase(next)
-      setRemaining(next === 'long_break' ? longSec : shortSec)
+      setOvertimeSec(0)
+      setPhase('before_break')
       workStartRef.current = null
       return
     }
     if (phase === 'short_break' || phase === 'long_break') {
-      setPhase('idle')
-      setRemaining(workSec)
+      setOvertimeSec(0)
+      return
     }
   }, [
     remaining,
@@ -299,6 +369,13 @@ export default function App() {
     setRemaining(workSec)
   }
 
+  function startBreak() {
+    if (phase !== 'before_break') return
+    setOvertimeSec(0)
+    setPhase(pendingBreak)
+    setRemaining(pendingBreak === 'long_break' ? longSec : shortSec)
+  }
+
   function stopSession() {
     if (phase !== 'work') return
     const end = Date.now()
@@ -314,9 +391,15 @@ export default function App() {
   }
 
   function skipBreak() {
-    if (phase !== 'short_break' && phase !== 'long_break') return
+    if (
+      phase !== 'short_break' &&
+      phase !== 'long_break' &&
+      phase !== 'before_break'
+    )
+      return
     setPhase('idle')
     setRemaining(workSec)
+    setOvertimeSec(0)
   }
 
   function disconnect() {
@@ -328,20 +411,25 @@ export default function App() {
     setTokenDraft('')
     setPhase('idle')
     setRemaining(workSec)
+    setOvertimeSec(0)
     setSyncNote(null)
   }
 
   const phaseLabel =
     phase === 'work'
       ? 'Focus'
-      : phase === 'short_break'
-        ? 'Short break'
-        : phase === 'long_break'
-          ? 'Long break'
-          : 'Ready'
+      : phase === 'before_break'
+        ? pendingBreak === 'long_break'
+          ? 'Break soon (long)'
+          : 'Break soon (short)'
+        : phase === 'short_break'
+          ? 'Short break'
+          : phase === 'long_break'
+            ? 'Long break'
+            : 'Ready'
 
   const dialProgress =
-    phase === 'idle'
+    phase === 'idle' || phase === 'before_break'
       ? 0
       : phase === 'work'
         ? workSec > 0
@@ -349,10 +437,14 @@ export default function App() {
           : 0
         : phase === 'short_break'
           ? shortSec > 0
-            ? 1 - remaining / shortSec
+            ? remaining > 0
+              ? 1 - remaining / shortSec
+              : 1
             : 0
           : longSec > 0
-            ? 1 - remaining / longSec
+            ? remaining > 0
+              ? 1 - remaining / longSec
+              : 1
             : 0
 
   return (
@@ -465,14 +557,24 @@ export default function App() {
             <div className="timer-inner">
               <p className="phase">{phaseLabel}</p>
               <p className="clock" aria-live="polite">
-                {formatClock(remaining)}
+                {phase === 'before_break' ||
+                ((phase === 'short_break' || phase === 'long_break') &&
+                  remaining === 0)
+                  ? formatOvertime(overtimeSec)
+                  : formatClock(remaining)}
               </p>
               <p className="meta">
                 {phase === 'idle'
                   ? `${Math.round(workSec / 60)} min focus · After this focus: ${(pomosUntilLong + 1) % 4 === 0 ? 'long' : 'short'} break`
                   : phase === 'work'
                     ? 'Stay on task until the bell.'
-                    : 'Breathe. Next round is waiting.'}
+                    : phase === 'before_break'
+                      ? 'Extra time is counting. Start the break when you are ready.'
+                      : phase === 'short_break' || phase === 'long_break'
+                        ? remaining === 0
+                          ? 'Break time is over. Extra time is counting — end when you are ready.'
+                          : 'Breathe. Next round is waiting.'
+                        : ''}
               </p>
             </div>
           </section>
@@ -488,9 +590,19 @@ export default function App() {
                 Stop &amp; reset
               </button>
             )}
+            {phase === 'before_break' && (
+              <>
+                <button type="button" className="primary" onClick={startBreak}>
+                  Start break
+                </button>
+                <button type="button" className="secondary" onClick={skipBreak}>
+                  Skip break
+                </button>
+              </>
+            )}
             {(phase === 'short_break' || phase === 'long_break') && (
               <button type="button" className="secondary" onClick={skipBreak}>
-                Skip break
+                {remaining === 0 ? 'End break' : 'Skip break'}
               </button>
             )}
           </div>
@@ -531,6 +643,50 @@ export default function App() {
             </div>
           </section>
         </>
+      )}
+
+      {isNativeShell() && (
+        <section className="card mac-login" aria-labelledby="mac-login-heading">
+          <h3 id="mac-login-heading">Mac app</h3>
+          <div className="mac-login-row">
+            <input
+              id="pomodoro-open-at-login"
+              type="checkbox"
+              className="mac-login-checkbox"
+              checked={openAtLogin}
+              disabled={loginItemBusy}
+              onChange={async (e) => {
+                const next = e.target.checked
+                setLoginItemBusy(true)
+                setLoginItemError(null)
+                try {
+                  const d = await setLoginItemEnabled(next)
+                  if (d.error) setLoginItemError(d.error)
+                  setOpenAtLogin(d.enabled)
+                  setLoginItemNeedsApproval(Boolean(d.requiresApproval))
+                } catch (err) {
+                  setLoginItemError(
+                    err instanceof Error ? err.message : 'Could not update',
+                  )
+                } finally {
+                  setLoginItemBusy(false)
+                }
+              }}
+            />
+            <label className="mac-login-row-label" htmlFor="pomodoro-open-at-login">
+              Open at login
+            </label>
+          </div>
+          {loginItemNeedsApproval && (
+            <p className="mac-login-hint">
+              Approve &ldquo;Pomodoro × Toggl&rdquo; in System Settings → General
+              → Login Items &amp; Extensions (or Open at Login).
+            </p>
+          )}
+          {loginItemError && (
+            <p className="error mac-login-error">{loginItemError}</p>
+          )}
+        </section>
       )}
 
       <footer className="foot">

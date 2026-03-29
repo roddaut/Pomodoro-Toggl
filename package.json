@@ -11,7 +11,9 @@
     "copy-web": "bash scripts/copy-web.sh",
     "macos:bundle": "npm run build && bash scripts/copy-web.sh",
     "macos:build": "npm run macos:bundle && swift build -c release",
-    "macos:run": "npm run macos:build && .build/release/PomodoroToggl"
+    "macos:app": "bash scripts/macos-app-bundle.sh",
+    "macos:open": "npm run macos:app && open build/macos/PomodoroToggl.app",
+    "macos:run": "npm run macos:build && \"$(swift build -c release --show-bin-path)/PomodoroToggl\""
   },
   "dependencies": {
     "react": "^19.2.4",

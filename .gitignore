@@ -26,3 +26,4 @@ dist-ssr
 # SwiftPM (macOS wrapper)
 .build/
 Sources/PomodoroToggl/Resources/dist/
+build/macos/

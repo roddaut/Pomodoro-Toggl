@@ -334,6 +334,50 @@
   max-width: 2.35rem;
 }
 
+.mac-login h3 {
+  margin-bottom: 0.65rem;
+}
+
+/* Sibling label + htmlFor (not wrapping input): WKWebView mishits nested checkbox-in-label flex rows. */
+.mac-login-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.mac-login-checkbox {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.mac-login-row-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mac-login-hint {
+  margin: 0.65rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.mac-login-error {
+  margin: 0.5rem 0 0;
+}
+
 .foot {
   margin-top: 2rem;
   padding-top: 1rem;
