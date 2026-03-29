@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/toggl/:path*",
+      "destination": "https://api.track.toggl.com/api/:path*"
+    }
+  ]
+}

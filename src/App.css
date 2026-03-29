@@ -1,0 +1,361 @@
+.app {
+  width: 100%;
+  max-width: 42rem;
+  min-width: 0;
+  margin: 0 auto;
+  padding: 2.5rem clamp(1rem, 4vw, 1.25rem) 4rem;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+.top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  min-width: 0;
+}
+
+.top > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.top h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.65rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.25rem 1.35rem;
+  margin-bottom: 1.25rem;
+  box-shadow: var(--shadow);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.card h2,
+.card h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+
+.card.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 32rem) {
+  .card.grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field span {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.field input,
+.field select {
+  font: inherit;
+  padding: 0.55rem 0.65rem;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.field select {
+  text-overflow: ellipsis;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.hint {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.hint a {
+  color: var(--accent);
+}
+
+.error {
+  color: #b42318;
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}
+
+.primary,
+.secondary,
+.danger,
+.ghost {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.6rem 1rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.danger {
+  background: transparent;
+  border-color: #f04438;
+  color: #b42318;
+}
+
+.ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+  flex: 0 0 auto;
+  padding: 0.5rem 0.95rem;
+  line-height: 1.35;
+  align-self: flex-start;
+}
+
+.timer {
+  position: relative;
+  display: grid;
+  place-items: center;
+  /* Match .ring size: abs-pos ring does not expand the grid, so without this the ring overflows and covers the actions below */
+  min-height: min(18rem, 80vw);
+  margin: 1.5rem 0 0.25rem;
+  padding-bottom: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.ring {
+  position: absolute;
+  width: min(18rem, 80vw);
+  height: min(18rem, 80vw);
+  pointer-events: none;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--accent) calc(var(--p, 0) * 360deg),
+    var(--border) 0
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 10px), #000 0);
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 10px),
+    #000 0
+  );
+  opacity: 0.9;
+}
+
+.timer-inner {
+  position: relative;
+  text-align: center;
+  z-index: 1;
+}
+
+.phase {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.clock {
+  margin: 0;
+  font-size: clamp(2.75rem, 10vw, 3.75rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.meta {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  max-width: min(16rem, 100%);
+  margin-inline: auto;
+  line-height: 1.4;
+  padding-inline: 0.25rem;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.75rem 0 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.sync {
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
+.durations-hint {
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.durations .row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 28rem) {
+  .durations .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.duration-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.duration-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.duration-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.duration-part {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.duration-unit {
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.duration-part input {
+  font: inherit;
+  padding: 0.4rem 0.35rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+  min-width: 0;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.duration-part input::-webkit-outer-spin-button,
+.duration-part input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.duration-part input.duration-input-min {
+  width: min(3rem, 100%);
+  max-width: 3rem;
+}
+
+.duration-part input.duration-input-sec {
+  width: min(2.35rem, 100%);
+  max-width: 2.35rem;
+}
+
+.foot {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.foot p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.foot code {
+  font-size: 0.85em;
+  background: var(--surface);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.foot a {
+  color: var(--accent);
+}

@@ -1,0 +1,50 @@
+:root {
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  font-weight: 450;
+  color-scheme: light;
+  --bg: #f6f1ea;
+  --surface: #fffdf8;
+  --text: #1c1917;
+  --muted: #57534e;
+  --border: #e7e0d6;
+  --accent: #c2410c;
+  --shadow: 0 12px 40px rgba(28, 25, 23, 0.06);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: clip;
+  background: radial-gradient(
+      1200px 600px at 50% -10%,
+      #fff7ed 0%,
+      transparent 55%
+    ),
+    var(--bg);
+}
+
+#root {
+  min-height: 100vh;
+  width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+a {
+  text-decoration-skip-ink: auto;
+}
