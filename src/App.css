@@ -74,7 +74,8 @@
   min-width: 0;
 }
 
-.field.full {
+.field.full,
+.card.grid > .full {
   grid-column: 1 / -1;
 }
 

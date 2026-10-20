@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import {
   createTimeEntry,
   fetchMe,
+  fetchProjects,
+  fetchWorkspaces,
   type TogglMe,
+  type TogglProject,
+  type TogglWorkspace,
 } from './lib/toggl'
 import {
   getLoginItemStatus,
@@ -128,6 +132,9 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const [workspaces, setWorkspaces] = useState<TogglWorkspace[]>([])
+  const [projects, setProjects] = useState<TogglProject[]>([])
+  const [projectsBusy, setProjectsBusy] = useState(false)
   const [workspaceId, setWorkspaceId] = useState<number | ''>('')
   const [projectId, setProjectId] = useState<number | ''>('')
   const [description, setDescription] = useState('')
@@ -152,13 +159,38 @@ export default function App() {
   const [loginItemError, setLoginItemError] = useState<string | null>(null)
   const [loginItemBusy, setLoginItemBusy] = useState(false)
 
-  const workspaces = me?.workspaces ?? []
-  const projectsForWs = useMemo(() => {
-    if (workspaceId === '') return []
-    return (me?.projects ?? []).filter(
-      (p) => p.workspace_id === workspaceId && p.active !== false,
-    )
-  }, [me?.projects, workspaceId])
+  /** `/me` carries workspaces only on some accounts, so `/workspaces` is the source of truth with `/me` as fallback. */
+  const loadAccount = useCallback(async (t: string) => {
+    setBusy(true)
+    setLoadError(null)
+    try {
+      const [profile, wsList] = await Promise.all([
+        fetchMe(t),
+        fetchWorkspaces(t).catch(() => null),
+      ])
+      setMe(profile)
+      const list = wsList?.length ? wsList : (profile.workspaces ?? [])
+      setWorkspaces(list)
+      if (!list.length) {
+        setLoadError('This Toggl account has no workspaces.')
+        return
+      }
+      setWorkspaceId((prev) => {
+        if (prev !== '' && list.some((w) => w.id === prev)) return prev
+        const preferred = list.some(
+          (w) => w.id === profile.default_workspace_id,
+        )
+          ? (profile.default_workspace_id as number)
+          : list[0].id
+        return preferred
+      })
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Could not reach Toggl.')
+      throw e
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
   const connect = useCallback(async () => {
     const t = tokenDraft.trim() || token
@@ -166,63 +198,57 @@ export default function App() {
       setLoadError('Paste your API token first.')
       return
     }
-    setBusy(true)
-    setLoadError(null)
     try {
-      const profile = await fetchMe(t)
-      setMe(profile)
+      await loadAccount(t)
       setToken(t)
       saveToken(t)
-      const wid =
-        profile.default_workspace_id ??
-        profile.workspaces?.[0]?.id ??
-        ''
-      setWorkspaceId(wid === '' ? '' : wid)
-      const firstProject = profile.projects?.find(
-        (p) => p.workspace_id === wid && p.active !== false,
-      )
-      setProjectId(firstProject?.id ?? '')
-    } catch (e) {
+    } catch {
+      // loadAccount already surfaced the reason; keep the token form visible.
       setMe(null)
-      setLoadError(e instanceof Error ? e.message : 'Could not reach Toggl.')
-    } finally {
-      setBusy(false)
+      setWorkspaces([])
     }
-  }, [token, tokenDraft])
+  }, [loadAccount, token, tokenDraft])
 
   useEffect(() => {
     if (!token) return
-    setBusy(true)
-    setLoadError(null)
-    fetchMe(token)
-      .then((profile) => {
-        setMe(profile)
-        const wid =
-          profile.default_workspace_id ??
-          profile.workspaces?.[0]?.id ??
-          ''
-        setWorkspaceId((prev) =>
-          prev !== '' ? prev : wid === '' ? '' : wid,
+    void loadAccount(token).catch(() => {
+      // Keep whatever we already loaded so the pickers stay usable; the error is shown above them.
+    })
+  }, [loadAccount, token])
+
+  useEffect(() => {
+    if (!token || workspaceId === '') {
+      setProjects([])
+      return
+    }
+    const ac = new AbortController()
+    setProjectsBusy(true)
+    fetchProjects(token, workspaceId, ac.signal)
+      .then((list) => {
+        if (ac.signal.aborted) return
+        setProjects(
+          (list ?? []).filter((p) => p.active !== false),
         )
       })
       .catch((e) => {
-        setLoadError(e instanceof Error ? e.message : 'Session expired.')
-        setMe(null)
+        if (ac.signal.aborted) return
+        setProjects([])
+        setLoadError(
+          e instanceof Error ? e.message : 'Could not load projects.',
+        )
       })
-      .finally(() => setBusy(false))
-  }, [token])
+      .finally(() => {
+        if (!ac.signal.aborted) setProjectsBusy(false)
+      })
+    return () => ac.abort()
+  }, [token, workspaceId])
 
   useEffect(() => {
-    if (workspaceId === '') {
-      setProjectId('')
-      return
-    }
-    const stillValid = projectsForWs.some((p) => p.id === projectId)
-    if (!stillValid) {
-      const first = projectsForWs[0]
-      setProjectId(first?.id ?? '')
-    }
-  }, [workspaceId, projectsForWs, projectId])
+    // Drop a project that belongs to another workspace, but leave "No project" alone.
+    if (projectId === '') return
+    if (projectsBusy) return
+    if (!projects.some((p) => p.id === projectId)) setProjectId('')
+  }, [projects, projectsBusy, projectId])
 
   useEffect(() => {
     postNativePhase(phase, Boolean(token))
@@ -406,6 +432,8 @@ export default function App() {
     clearToken()
     setToken(null)
     setMe(null)
+    setWorkspaces([])
+    setProjects([])
     setWorkspaceId('')
     setProjectId('')
     setTokenDraft('')
@@ -500,16 +528,39 @@ export default function App() {
       ) : (
         <>
           <section className="card grid">
+            {loadError && (
+              <div className="field full">
+                <p className="error">{loadError}</p>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy}
+                  onClick={() => void loadAccount(token).catch(() => {})}
+                >
+                  {busy ? 'Retrying…' : 'Retry'}
+                </button>
+              </div>
+            )}
             <label className="field">
               <span>Workspace</span>
               <select
                 value={workspaceId === '' ? '' : String(workspaceId)}
+                disabled={busy && !workspaces.length}
                 onChange={(e) =>
                   setWorkspaceId(
                     e.target.value ? Number(e.target.value) : '',
                   )
                 }
               >
+                {(workspaceId === '' || !workspaces.length) && (
+                  <option value="">
+                    {busy
+                      ? 'Loading workspaces…'
+                      : workspaces.length
+                        ? 'Select a workspace…'
+                        : 'No workspaces found'}
+                  </option>
+                )}
                 {workspaces.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
@@ -521,18 +572,33 @@ export default function App() {
               <span>Project (optional)</span>
               <select
                 value={projectId === '' ? '' : String(projectId)}
+                disabled={workspaceId === '' || projectsBusy}
                 onChange={(e) =>
                   setProjectId(e.target.value ? Number(e.target.value) : '')
                 }
               >
-                <option value="">No project</option>
-                {projectsForWs.map((p) => (
+                <option value="">
+                  {workspaceId === ''
+                    ? 'Pick a workspace first'
+                    : projectsBusy
+                      ? 'Loading projects…'
+                      : 'No project'}
+                </option>
+                {projects.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>
                 ))}
               </select>
             </label>
+            {me && (
+              <p className="hint full">
+                Connected as {me.fullname || me.email}
+                {workspaces.length
+                  ? ` · ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'}`
+                  : ''}
+              </p>
+            )}
             <label className="field full">
               <span>What are you working on?</span>
               <input

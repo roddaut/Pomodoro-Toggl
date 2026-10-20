@@ -90,3 +90,33 @@ export function createTimeEntry(
     },
   )
 }
+
+export interface TogglWorkspace {
+  id: number
+  name: string
+}
+
+export interface TogglProject {
+  id: number
+  name: string
+  workspace_id: number
+  active: boolean
+}
+
+/** `/me?with_related_data=true` omits workspaces on some accounts; this is the authoritative list. */
+export function fetchWorkspaces(token: string) {
+  return togglFetch<TogglWorkspace[]>(token, '/v9/workspaces')
+}
+
+/** Projects are per workspace; `/me` only ever carries a partial set. */
+export function fetchProjects(
+  token: string,
+  workspaceId: number,
+  signal?: AbortSignal,
+) {
+  return togglFetch<TogglProject[] | null>(
+    token,
+    `/v9/workspaces/${workspaceId}/projects?active=true`,
+    { signal },
+  )
+}
