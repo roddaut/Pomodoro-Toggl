@@ -1,6 +1,21 @@
 /** Browser calls this path; Vite (dev/preview) and vercel.json rewrite proxy to api.track.toggl.com */
 export const TOGGL_API_PREFIX = '/api/toggl'
 
+/** Carries the HTTP status so callers can tell a rejected token from a network blip. */
+export class TogglApiError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'TogglApiError'
+    this.status = status
+  }
+}
+
+/** Toggl answers a bad or revoked API token with 401/403. */
+export function isAuthError(e: unknown): boolean {
+  return e instanceof TogglApiError && (e.status === 401 || e.status === 403)
+}
+
 function authHeader(token: string): HeadersInit {
   const b64 = btoa(`${token}:api_token`)
   return {
@@ -24,7 +39,10 @@ export async function togglFetch<T>(
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Toggl ${res.status}: ${text.slice(0, 280)}`)
+    throw new TogglApiError(
+      res.status,
+      `Toggl ${res.status}: ${text.slice(0, 280)}`,
+    )
   }
   if (res.status === 204) return undefined as T
   const ct = res.headers.get('content-type')

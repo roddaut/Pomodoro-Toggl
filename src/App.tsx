@@ -5,6 +5,7 @@ import {
   fetchMe,
   fetchProjects,
   fetchWorkspaces,
+  isAuthError,
   type TogglMe,
   type TogglProject,
   type TogglWorkspace,
@@ -247,6 +248,20 @@ export default function App() {
         return preferred
       })
     } catch (e) {
+      if (isAuthError(e)) {
+        // A stored token Toggl rejects leaves no way back to the token form,
+        // so drop it and return to "Connect Toggl Track" with the reason shown.
+        clearToken()
+        setToken(null)
+        setMe(null)
+        setWorkspaces([])
+        setProjects([])
+        setWorkspaceId('')
+        setLoadError(
+          'Toggl rejected that API token. Copy a current one from Profile → API token and paste it below.',
+        )
+        throw e
+      }
       setLoadError(e instanceof Error ? e.message : 'Could not reach Toggl.')
       throw e
     } finally {
