@@ -98,6 +98,14 @@ export default function ProjectCombobox({
     }
   }
 
+  /** `onFocus` alone misses the common case: after committing a choice the input keeps
+   *  focus, so the next click fires no focus event and the list never reopens. */
+  const openMenu = useCallback(() => {
+    setOpen(true)
+    setQuery(projectId === '' ? '' : selectedName)
+    setHighlightIndex(0)
+  }, [projectId, selectedName])
+
   const onBlur = () => {
     window.setTimeout(() => {
       restoreAndClose()
@@ -119,10 +127,9 @@ export default function ProjectCombobox({
         value={inputValue}
         onChange={onInputChange}
         onKeyDown={onKeyDown}
-        onFocus={() => {
-          setOpen(true)
-          setQuery(projectId === '' ? '' : selectedName)
-          setHighlightIndex(0)
+        onFocus={openMenu}
+        onClick={() => {
+          if (!open) openMenu()
         }}
         onBlur={onBlur}
         placeholder="Search projects…"
