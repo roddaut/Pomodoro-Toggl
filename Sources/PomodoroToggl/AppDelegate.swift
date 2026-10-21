@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
 
-    let rect = NSRect(x: 0, y: 0, width: 440, height: 780)
+    let rect = NSRect(x: 0, y: 0, width: 745, height: 945)
     let window = NSWindow(
       contentRect: rect,
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     self.window = window
     window.title = "Pomodoro × Toggl"
-    window.minSize = NSSize(width: 360, height: 560)
+    window.minSize = NSSize(width: 480, height: 740)
     window.center()
 
     let useDevServer =
@@ -84,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
 
+    deskReminder.hostWindow = window
     deskReminder.start()
   }
 

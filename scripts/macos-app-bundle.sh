@@ -30,6 +30,8 @@ mkdir -p "$MACOS_DIR"
 cp "$EXE" "$MACOS_DIR/"
 cp -R "$BUNDLE" "$MACOS_DIR/"
 cp "$ROOT/macos/Info.plist" "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp "$ROOT/macos/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 echo ""
 echo "Built: $APP"

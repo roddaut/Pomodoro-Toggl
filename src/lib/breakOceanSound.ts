@@ -4,7 +4,7 @@
  * (e.g. Start focus) so playback is allowed when the break starts automatically.
  */
 
-import { getSharedAudioContext } from './workCompleteSound'
+import { ensureAudioRunning, getSharedAudioContext } from './workCompleteSound'
 
 type OceanNodes = {
   source: AudioBufferSourceNode
@@ -39,46 +39,44 @@ function makeBrownNoiseBuffer(c: AudioContext, durationSec: number): AudioBuffer
 
 /** Start looping ocean / surf ambience. Safe to call when already playing (no-op). */
 export function startBreakOceanSound(): void {
-  try {
-    const c = getSharedAudioContext()
-    if (!c) return
-    if (c.state === 'suspended') void c.resume()
-    if (ocean) return
+  void ensureAudioRunning().then((c) => {
+    if (!c || ocean) return
+    try {
+      const buffer = makeBrownNoiseBuffer(c, 8)
+      const source = c.createBufferSource()
+      source.buffer = buffer
+      source.loop = true
 
-    const buffer = makeBrownNoiseBuffer(c, 8)
-    const source = c.createBufferSource()
-    source.buffer = buffer
-    source.loop = true
+      const filter = c.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.value = 520
+      filter.Q.value = 0.7
 
-    const filter = c.createBiquadFilter()
-    filter.type = 'lowpass'
-    filter.frequency.value = 520
-    filter.Q.value = 0.7
+      const master = c.createGain()
+      master.gain.value = 0.11
 
-    const master = c.createGain()
-    master.gain.value = 0.11
+      const lfo = c.createOscillator()
+      lfo.type = 'sine'
+      lfo.frequency.value = 0.11
+      const lfoGain = c.createGain()
+      lfoGain.gain.value = 0.045
 
-    const lfo = c.createOscillator()
-    lfo.type = 'sine'
-    lfo.frequency.value = 0.11
-    const lfoGain = c.createGain()
-    lfoGain.gain.value = 0.045
+      source.connect(filter)
+      filter.connect(master)
+      master.connect(c.destination)
 
-    source.connect(filter)
-    filter.connect(master)
-    master.connect(c.destination)
+      lfo.connect(lfoGain)
+      lfoGain.connect(master.gain)
 
-    lfo.connect(lfoGain)
-    lfoGain.connect(master.gain)
+      const now = c.currentTime
+      source.start(now)
+      lfo.start(now)
 
-    const now = c.currentTime
-    source.start(now)
-    lfo.start(now)
-
-    ocean = { source, filter, master, lfo, lfoGain }
-  } catch {
-    /* ignore */
-  }
+      ocean = { source, filter, master, lfo, lfoGain }
+    } catch {
+      /* ignore */
+    }
+  })
 }
 
 /** Stop ambience and release nodes. */

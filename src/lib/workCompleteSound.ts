@@ -13,13 +13,28 @@ export function getSharedAudioContext(): AudioContext | null {
   return ctx
 }
 
-export function prepareWorkAudio(): void {
+/**
+ * Ensures the shared AudioContext is running. Always await before scheduling
+ * nodes — `resume()` is async; scheduling while still suspended can be silent.
+ */
+export async function ensureAudioRunning(): Promise<AudioContext | null> {
   try {
     const c = getSharedAudioContext()
-    if (c?.state === 'suspended') void c.resume()
+    if (!c) return null
+    if (c.state === 'suspended') await c.resume()
+    return c.state === 'closed' ? null : c
   } catch {
-    /* ignore */
+    return null
   }
+}
+
+export function prepareWorkAudio(): void {
+  void ensureAudioRunning()
+}
+
+/** Fire-and-forget resume; use from focus, visibility, overtime entry, or pointer. */
+export function wakeSharedAudio(): void {
+  void ensureAudioRunning()
 }
 
 /** C major pentatonic ascending — reads as a clear “chime” cascade. */
@@ -52,23 +67,22 @@ function bellStrike(
 }
 
 export function playWorkCompleteSound(): void {
-  try {
-    const c = getSharedAudioContext()
+  void ensureAudioRunning().then((c) => {
     if (!c) return
-    if (c.state === 'suspended') void c.resume()
+    try {
+      const now = c.currentTime
+      const master = c.createGain()
+      master.gain.setValueAtTime(0.1, now)
+      master.gain.setValueAtTime(0.1, now + 0.65)
+      master.gain.exponentialRampToValueAtTime(0.001, now + 1.05)
+      master.connect(c.destination)
 
-    const now = c.currentTime
-    const master = c.createGain()
-    master.gain.setValueAtTime(0.1, now)
-    master.gain.setValueAtTime(0.1, now + 0.65)
-    master.gain.exponentialRampToValueAtTime(0.001, now + 1.05)
-    master.connect(c.destination)
-
-    const gap = 0.11
-    CHIME_FREQS_HZ.forEach((hz, i) => {
-      bellStrike(c, hz, now + i * gap, master)
-    })
-  } catch {
-    /* ignore */
-  }
+      const gap = 0.11
+      CHIME_FREQS_HZ.forEach((hz, i) => {
+        bellStrike(c, hz, now + i * gap, master)
+      })
+    } catch {
+      /* ignore */
+    }
+  })
 }

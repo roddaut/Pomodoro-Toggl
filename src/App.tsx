@@ -10,19 +10,33 @@ import {
   type TogglWorkspace,
 } from './lib/toggl'
 import {
-  getLoginItemStatus,
   isNativeShell,
   postNativePhase,
-  setLoginItemEnabled,
+  setDeskReminderSettings,
 } from './lib/nativeBridge'
-import { clearToken, loadToken, saveToken } from './lib/storage'
+import {
+  clearToken,
+  loadDeskReminderSettings,
+  loadFocusAmbientId,
+  loadToken,
+  saveToken,
+  type FocusAmbientId,
+} from './lib/storage'
+import SettingsPage from './SettingsPage'
+import ProjectCombobox from './ProjectCombobox'
 import {
   startBreakOceanSound,
   stopBreakOceanSound,
 } from './lib/breakOceanSound'
 import {
+  startFocusAmbient,
+  stopFocusAmbient,
+} from './lib/focusAmbientSound'
+import {
+  ensureAudioRunning,
   playWorkCompleteSound,
   prepareWorkAudio,
+  wakeSharedAudio,
 } from './lib/workCompleteSound'
 import { playTickSound } from './lib/tickSound'
 
@@ -37,6 +51,13 @@ const DEFAULT_WORK = 25 * 60
 const DEFAULT_SHORT = 5 * 60
 const DEFAULT_LONG = 15 * 60
 
+/** First overtime tick after work chime (ms); subsequent ticks every 1s. */
+const FIRST_TICK_AFTER_CHIME_MS = 500
+/** Keep Web Audio unlocked during long focus sessions (ms). */
+const AUDIO_KEEPALIVE_MS = 60_000
+/** Throttle pointer-driven `wakeSharedAudio` (ms). */
+const POINTER_WAKE_THROTTLE_MS = 800
+
 function formatClock(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60)
   const s = totalSeconds % 60
@@ -45,6 +66,11 @@ function formatClock(totalSeconds: number): string {
 
 function formatOvertime(totalSeconds: number): string {
   return `+${formatClock(totalSeconds)}`
+}
+
+/** Seconds left until `endMs` using wall time — avoids UI drift when `setInterval` is throttled in the background. */
+function secondsRemainingUntil(endMs: number): number {
+  return Math.max(0, Math.ceil((endMs - Date.now()) / 1000))
 }
 
 /** Full ISO 8601 (ms kept). Toggl validates `duration` against `stop − start`; rounding away ms made both timestamps the same second for short spans. */
@@ -147,6 +173,7 @@ export default function App() {
   const [pomosUntilLong, setPomosUntilLong] = useState(0)
 
   const workStartRef = useRef<number | null>(null)
+  const breakEndAtRef = useRef<number | null>(null)
   const zeroHandledRef = useRef(false)
   const [syncNote, setSyncNote] = useState<string | null>(null)
   const [overtimeSec, setOvertimeSec] = useState(0)
@@ -154,10 +181,45 @@ export default function App() {
     'short_break',
   )
 
-  const [openAtLogin, setOpenAtLogin] = useState(false)
-  const [loginItemNeedsApproval, setLoginItemNeedsApproval] = useState(false)
-  const [loginItemError, setLoginItemError] = useState<string | null>(null)
-  const [loginItemBusy, setLoginItemBusy] = useState(false)
+  const [view, setView] = useState<'main' | 'settings'>('main')
+  const [focusAmbientId, setFocusAmbientId] = useState<FocusAmbientId>(
+    () => loadFocusAmbientId(),
+  )
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') wakeSharedAudio()
+    }
+    const onFocus = () => {
+      wakeSharedAudio()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
+
+  useEffect(() => {
+    let last = 0
+    const onPointerDown = () => {
+      const t = Date.now()
+      if (t - last < POINTER_WAKE_THROTTLE_MS) return
+      last = t
+      wakeSharedAudio()
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [])
+
+  useEffect(() => {
+    if (phase !== 'work') return
+    const id = window.setInterval(() => {
+      void ensureAudioRunning()
+    }, AUDIO_KEEPALIVE_MS)
+    return () => window.clearInterval(id)
+  }, [phase])
 
   /** `/me` carries workspaces only on some accounts, so `/workspaces` is the source of truth with `/me` as fallback. */
   const loadAccount = useCallback(async (t: string) => {
@@ -257,14 +319,12 @@ export default function App() {
   useEffect(() => {
     if (!isNativeShell()) return
     const ac = new AbortController()
+    const s = loadDeskReminderSettings()
     void (async () => {
       try {
-        const d = await getLoginItemStatus(ac.signal)
-        setOpenAtLogin(d.enabled)
-        setLoginItemNeedsApproval(Boolean(d.requiresApproval))
+        await setDeskReminderSettings(s.enabled, s.thresholdMinutes, ac.signal)
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return
-        // Bridge not ready or native error — leave defaults; avoid noisy timeout in UI
       }
     })()
     return () => ac.abort()
@@ -278,6 +338,18 @@ export default function App() {
     return () => stopBreakOceanSound()
   }, [phase, remaining])
 
+  useEffect(() => {
+    if (phase !== 'work') {
+      stopFocusAmbient()
+      return
+    }
+    void ensureAudioRunning().then(() => {
+      startFocusAmbient(focusAmbientId)
+    })
+    return () => stopFocusAmbient()
+  }, [phase, focusAmbientId])
+
+  /** Submit elapsed work to Toggl (duration at least 1s). Used when finishing early, starting a break, or skipping from “break soon”. */
   const logSession = useCallback(
     async (startedAt: number, endedAt: number) => {
       if (!token || workspaceId === '') {
@@ -312,42 +384,105 @@ export default function App() {
     [token, workspaceId, projectId, description],
   )
 
+  const completeFocusAndGoToBeforeBreak = useCallback(
+    (end: number, options?: { deferToggl?: boolean }) => {
+      void (async () => {
+        await ensureAudioRunning()
+        playWorkCompleteSound()
+      })()
+      const deferToggl = options?.deferToggl ?? false
+      if (!deferToggl) {
+        const start = workStartRef.current ?? end - workSec * 1000
+        void logSession(start, end)
+        workStartRef.current = null
+      }
+      const next =
+        (pomosUntilLong + 1) % 4 === 0 ? 'long_break' : 'short_break'
+      setPendingBreak(next)
+      setPomosUntilLong((n) => n + 1)
+      setOvertimeSec(0)
+      setPhase('before_break')
+    },
+    [logSession, pomosUntilLong, workSec],
+  )
+
   useEffect(() => {
     if (phase === 'before_break') {
-      const id = window.setInterval(() => {
+      void ensureAudioRunning()
+      let intervalId: ReturnType<typeof setInterval> | undefined
+      const timeoutId = window.setTimeout(() => {
         setOvertimeSec((o) => o + 1)
         playTickSound()
-      }, 1000)
-      return () => window.clearInterval(id)
+        intervalId = window.setInterval(() => {
+          setOvertimeSec((o) => o + 1)
+          playTickSound()
+        }, 1000)
+      }, FIRST_TICK_AFTER_CHIME_MS)
+      return () => {
+        window.clearTimeout(timeoutId)
+        if (intervalId !== undefined) window.clearInterval(intervalId)
+      }
     }
     if (phase === 'work') {
-      const id = window.setInterval(() => {
-        setRemaining((r) => {
-          if (r <= 1) return 0
-          return r - 1
-        })
-      }, 1000)
+      const tick = () => {
+        const start = workStartRef.current
+        if (start === null) return
+        setRemaining(secondsRemainingUntil(start + workSec * 1000))
+      }
+      tick()
+      const id = window.setInterval(tick, 1000)
       return () => window.clearInterval(id)
     }
     if (phase === 'short_break' || phase === 'long_break') {
-      const id = window.setInterval(() => {
-        setRemaining((r) => {
-          if (r <= 1) return 0
-          return r - 1
-        })
-      }, 1000)
+      const tick = () => {
+        const endAt = breakEndAtRef.current
+        if (endAt === null) return
+        setRemaining(secondsRemainingUntil(endAt))
+      }
+      tick()
+      const id = window.setInterval(tick, 1000)
       return () => window.clearInterval(id)
     }
-  }, [phase])
+  }, [phase, workSec])
+
+  useEffect(() => {
+    const sync = () => {
+      if (document.visibilityState !== 'visible') return
+      if (phase === 'work') {
+        const start = workStartRef.current
+        if (start === null) return
+        setRemaining(secondsRemainingUntil(start + workSec * 1000))
+      } else if (phase === 'short_break' || phase === 'long_break') {
+        const endAt = breakEndAtRef.current
+        if (endAt === null) return
+        setRemaining(secondsRemainingUntil(endAt))
+      }
+    }
+    document.addEventListener('visibilitychange', sync)
+    window.addEventListener('focus', sync)
+    return () => {
+      document.removeEventListener('visibilitychange', sync)
+      window.removeEventListener('focus', sync)
+    }
+  }, [phase, workSec])
 
   useEffect(() => {
     if (phase !== 'short_break' && phase !== 'long_break') return
     if (remaining > 0) return
-    const id = window.setInterval(() => {
+    void ensureAudioRunning()
+    let intervalId: ReturnType<typeof setInterval> | undefined
+    const timeoutId = window.setTimeout(() => {
       setOvertimeSec((o) => o + 1)
       playTickSound()
-    }, 1000)
-    return () => window.clearInterval(id)
+      intervalId = window.setInterval(() => {
+        setOvertimeSec((o) => o + 1)
+        playTickSound()
+      }, 1000)
+    }, FIRST_TICK_AFTER_CHIME_MS)
+    return () => {
+      window.clearTimeout(timeoutId)
+      if (intervalId !== undefined) window.clearInterval(intervalId)
+    }
   }, [phase, remaining])
 
   useEffect(() => {
@@ -360,17 +495,7 @@ export default function App() {
     zeroHandledRef.current = true
 
     if (phase === 'work') {
-      playWorkCompleteSound()
-      const end = Date.now()
-      const start = workStartRef.current ?? end - workSec * 1000
-      void logSession(start, end)
-      const next =
-        (pomosUntilLong + 1) % 4 === 0 ? 'long_break' : 'short_break'
-      setPendingBreak(next)
-      setPomosUntilLong((n) => n + 1)
-      setOvertimeSec(0)
-      setPhase('before_break')
-      workStartRef.current = null
+      completeFocusAndGoToBeforeBreak(Date.now(), { deferToggl: true })
       return
     }
     if (phase === 'short_break' || phase === 'long_break') {
@@ -383,13 +508,14 @@ export default function App() {
     workSec,
     shortSec,
     longSec,
-    logSession,
     pomosUntilLong,
+    completeFocusAndGoToBeforeBreak,
   ])
 
   function startFocus() {
     prepareWorkAudio()
     setSyncNote(null)
+    breakEndAtRef.current = null
     workStartRef.current = Date.now()
     setPhase('work')
     setRemaining(workSec)
@@ -397,21 +523,29 @@ export default function App() {
 
   function startBreak() {
     if (phase !== 'before_break') return
+    const focusStart = workStartRef.current
+    if (focusStart !== null) {
+      void logSession(focusStart, Date.now())
+      workStartRef.current = null
+    }
     setOvertimeSec(0)
-    setPhase(pendingBreak)
-    setRemaining(pendingBreak === 'long_break' ? longSec : shortSec)
+    const next = pendingBreak
+    const duration = next === 'long_break' ? longSec : shortSec
+    breakEndAtRef.current = Date.now() + duration * 1000
+    setPhase(next)
+    setRemaining(duration)
   }
 
-  function stopSession() {
+  function finishWorkEarly() {
     if (phase !== 'work') return
-    const end = Date.now()
-    const start = workStartRef.current
+    completeFocusAndGoToBeforeBreak(Date.now())
+  }
+
+  /** Abandon focus without logging to Toggl. */
+  function discardWorkSession() {
+    if (phase !== 'work') return
     workStartRef.current = null
-    if (start != null) {
-      const elapsed = end - start
-      if (elapsed >= 60_000) void logSession(start, end)
-      else setSyncNote('Session under 1 minute — not sent to Toggl.')
-    }
+    setSyncNote(null)
     setPhase('idle')
     setRemaining(workSec)
   }
@@ -423,6 +557,14 @@ export default function App() {
       phase !== 'before_break'
     )
       return
+    if (phase === 'before_break') {
+      const focusStart = workStartRef.current
+      if (focusStart !== null) {
+        void logSession(focusStart, Date.now())
+        workStartRef.current = null
+      }
+    }
+    breakEndAtRef.current = null
     setPhase('idle')
     setRemaining(workSec)
     setOvertimeSec(0)
@@ -437,6 +579,7 @@ export default function App() {
     setWorkspaceId('')
     setProjectId('')
     setTokenDraft('')
+    breakEndAtRef.current = null
     setPhase('idle')
     setRemaining(workSec)
     setOvertimeSec(0)
@@ -475,6 +618,32 @@ export default function App() {
               : 1
             : 0
 
+  if (view === 'settings') {
+    return (
+      <div className="app">
+        <SettingsPage
+          focusAmbientId={focusAmbientId}
+          onFocusAmbientChange={setFocusAmbientId}
+          onBack={() => setView('main')}
+        />
+        <footer className="foot">
+          <p>
+            Uses{' '}
+            <a
+              href="https://developers.track.toggl.com/docs/api/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Toggl Track API v9
+            </a>
+            . Run locally with <code>npm run dev</code> so the dev proxy can reach
+            Toggl.
+          </p>
+        </footer>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <header className="top">
@@ -484,11 +653,20 @@ export default function App() {
             Focus sessions become Toggl time entries on your workspace.
           </p>
         </div>
-        {token && (
-          <button type="button" className="ghost" onClick={disconnect}>
-            Sign out
+        <div className="top-actions">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setView('settings')}
+          >
+            Settings
           </button>
-        )}
+          {token && (
+            <button type="button" className="ghost" onClick={disconnect}>
+              Sign out
+            </button>
+          )}
+        </div>
       </header>
 
       {!token ? (
@@ -570,26 +748,12 @@ export default function App() {
             </label>
             <label className="field">
               <span>Project (optional)</span>
-              <select
-                value={projectId === '' ? '' : String(projectId)}
-                disabled={workspaceId === '' || projectsBusy}
-                onChange={(e) =>
-                  setProjectId(e.target.value ? Number(e.target.value) : '')
-                }
-              >
-                <option value="">
-                  {workspaceId === ''
-                    ? 'Pick a workspace first'
-                    : projectsBusy
-                      ? 'Loading projects…'
-                      : 'No project'}
-                </option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+              <ProjectCombobox
+                key={workspaceId === '' ? '' : String(workspaceId)}
+                projects={projects}
+                projectId={projectId}
+                setProjectId={setProjectId}
+              />
             </label>
             {me && (
               <p className="hint full">
@@ -633,9 +797,9 @@ export default function App() {
                 {phase === 'idle'
                   ? `${Math.round(workSec / 60)} min focus · After this focus: ${(pomosUntilLong + 1) % 4 === 0 ? 'long' : 'short'} break`
                   : phase === 'work'
-                    ? 'Stay on task until the bell.'
+                    ? 'Finish early logs this session to Toggl and moves to your break. Discard cancels with no entry.'
                     : phase === 'before_break'
-                      ? 'Extra time is counting. Start the break when you are ready.'
+                      ? 'Extra time is counting toward this focus block. Toggl logs when you start the break or skip it.'
                       : phase === 'short_break' || phase === 'long_break'
                         ? remaining === 0
                           ? 'Break time is over. Extra time is counting — end when you are ready.'
@@ -652,9 +816,22 @@ export default function App() {
               </button>
             )}
             {phase === 'work' && (
-              <button type="button" className="danger" onClick={stopSession}>
-                Stop &amp; reset
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={finishWorkEarly}
+                >
+                  Finish early
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={discardWorkSession}
+                >
+                  Discard
+                </button>
+              </>
             )}
             {phase === 'before_break' && (
               <>
@@ -709,50 +886,6 @@ export default function App() {
             </div>
           </section>
         </>
-      )}
-
-      {isNativeShell() && (
-        <section className="card mac-login" aria-labelledby="mac-login-heading">
-          <h3 id="mac-login-heading">Mac app</h3>
-          <div className="mac-login-row">
-            <input
-              id="pomodoro-open-at-login"
-              type="checkbox"
-              className="mac-login-checkbox"
-              checked={openAtLogin}
-              disabled={loginItemBusy}
-              onChange={async (e) => {
-                const next = e.target.checked
-                setLoginItemBusy(true)
-                setLoginItemError(null)
-                try {
-                  const d = await setLoginItemEnabled(next)
-                  if (d.error) setLoginItemError(d.error)
-                  setOpenAtLogin(d.enabled)
-                  setLoginItemNeedsApproval(Boolean(d.requiresApproval))
-                } catch (err) {
-                  setLoginItemError(
-                    err instanceof Error ? err.message : 'Could not update',
-                  )
-                } finally {
-                  setLoginItemBusy(false)
-                }
-              }}
-            />
-            <label className="mac-login-row-label" htmlFor="pomodoro-open-at-login">
-              Open at login
-            </label>
-          </div>
-          {loginItemNeedsApproval && (
-            <p className="mac-login-hint">
-              Approve &ldquo;Pomodoro × Toggl&rdquo; in System Settings → General
-              → Login Items &amp; Extensions (or Open at Login).
-            </p>
-          )}
-          {loginItemError && (
-            <p className="error mac-login-error">{loginItemError}</p>
-          )}
-        </section>
       )}
 
       <footer className="foot">

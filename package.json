@@ -13,7 +13,8 @@
     "macos:build": "npm run macos:bundle && swift build -c release",
     "macos:app": "bash scripts/macos-app-bundle.sh",
     "macos:open": "npm run macos:app && open build/macos/PomodoroToggl.app",
-    "macos:run": "npm run macos:build && \"$(swift build -c release --show-bin-path)/PomodoroToggl\""
+    "macos:run": "npm run macos:app && open build/macos/PomodoroToggl.app",
+    "macos:run-binary": "npm run macos:build && \"$(swift build -c release --show-bin-path)/PomodoroToggl\""
   },
   "dependencies": {
     "react": "^19.2.4",
