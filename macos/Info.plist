@@ -6,6 +6,8 @@
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>PomodoroToggl</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.pomodoro-toggl.PomodoroToggl</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -24,5 +26,7 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Shows a reminder when you’re connected to Toggl but haven’t started a focus session.</string>
 </dict>
 </plist>

@@ -44,6 +44,30 @@ final class PomodoroBridge: NSObject, WKScriptMessageHandler {
         replyLoginItemError("Unknown loginItem action: \(action)")
       }
 
+    case "deskReminder":
+      guard let action = Self.stringValue(body["action"]) else {
+        replyDeskReminderError("Missing deskReminder action")
+        return
+      }
+      if action == "get" {
+        replyDeskReminderPayload()
+      } else if action == "set" {
+        guard let enabled = Self.boolValueOpt(body["enabled"]) else {
+          replyDeskReminderError("Missing or invalid “enabled” for deskReminder set")
+          return
+        }
+        guard let rawMinutes = Self.intValueOpt(body["thresholdMinutes"]) else {
+          replyDeskReminderError("Missing or invalid “thresholdMinutes” for deskReminder set")
+          return
+        }
+        let clamped = min(240, max(1, rawMinutes))
+        let seconds = Double(clamped) * 60
+        deskReminder.applyConfiguration(enabled: enabled, targetSeconds: seconds)
+        replyDeskReminderPayload()
+      } else {
+        replyDeskReminderError("Unknown deskReminder action: \(action)")
+      }
+
     default:
       break
     }
@@ -57,6 +81,7 @@ final class PomodoroBridge: NSObject, WKScriptMessageHandler {
     var detail: [String: Any] = [
       "enabled": LoginItemManager.loginItemOn,
       "requiresApproval": LoginItemManager.requiresApproval,
+      "supported": LoginItemManager.loginItemsSupported,
     ]
     if let error {
       detail["error"] = error
@@ -73,15 +98,65 @@ final class PomodoroBridge: NSObject, WKScriptMessageHandler {
     } else {
       let en = Self.boolValue(detail["enabled"])
       let ra = Self.boolValue(detail["requiresApproval"])
+      let sup = Self.boolValue(detail["supported"])
       let err = Self.stringValue(detail["error"]).map { Self.jsonEscape($0) } ?? ""
       if err.isEmpty {
-        json = "{\"enabled\":\(en),\"requiresApproval\":\(ra)}"
+        json = "{\"enabled\":\(en),\"requiresApproval\":\(ra),\"supported\":\(sup)}"
       } else {
-        json = "{\"enabled\":\(en),\"requiresApproval\":\(ra),\"error\":\"\(err)\"}"
+        json =
+          "{\"enabled\":\(en),\"requiresApproval\":\(ra),\"supported\":\(sup),\"error\":\"\(err)\"}"
       }
     }
     let js =
       "window.dispatchEvent(new CustomEvent('pomodoro-login-item', { detail: \(json) }));"
+    let run: () -> Void = { [weak self] in
+      self?.webView?.evaluateJavaScript(js) { _, error in
+        if let error {
+          NSLog("PomodoroBridge evaluateJavaScript: \(error.localizedDescription)")
+        }
+      }
+    }
+    if Thread.isMainThread {
+      run()
+    } else {
+      DispatchQueue.main.async(execute: run)
+    }
+  }
+
+  private func replyDeskReminderError(_ message: String) {
+    replyDeskReminderPayload(error: message)
+  }
+
+  private func replyDeskReminderPayload(error: String? = nil) {
+    let snap = deskReminder.currentConfiguration()
+    var detail: [String: Any] = [
+      "enabled": snap.enabled,
+      "thresholdMinutes": snap.thresholdMinutes,
+    ]
+    if let error {
+      detail["error"] = error
+    }
+    replyDeskReminderDetail(detail)
+  }
+
+  private func replyDeskReminderDetail(_ detail: [String: Any]) {
+    let json: String
+    if let data = try? JSONSerialization.data(withJSONObject: detail),
+      let s = String(data: data, encoding: .utf8)
+    {
+      json = s
+    } else {
+      let en = Self.boolValue(detail["enabled"])
+      let tm = Self.intValue(detail["thresholdMinutes"]) ?? 10
+      let err = Self.stringValue(detail["error"]).map { Self.jsonEscape($0) } ?? ""
+      if err.isEmpty {
+        json = "{\"enabled\":\(en),\"thresholdMinutes\":\(tm)}"
+      } else {
+        json = "{\"enabled\":\(en),\"thresholdMinutes\":\(tm),\"error\":\"\(err)\"}"
+      }
+    }
+    let js =
+      "window.dispatchEvent(new CustomEvent('pomodoro-desk-reminder', { detail: \(json) }));"
     let run: () -> Void = { [weak self] in
       self?.webView?.evaluateJavaScript(js) { _, error in
         if let error {
@@ -134,5 +209,15 @@ final class PomodoroBridge: NSObject, WKScriptMessageHandler {
     if let b = v as? Bool { return b }
     if let n = v as? NSNumber { return n.boolValue }
     return nil
+  }
+
+  private static func intValueOpt(_ v: Any?) -> Int? {
+    if let i = v as? Int { return i }
+    if let n = v as? NSNumber { return n.intValue }
+    return nil
+  }
+
+  private static func intValue(_ v: Any?) -> Int? {
+    intValueOpt(v)
   }
 }
