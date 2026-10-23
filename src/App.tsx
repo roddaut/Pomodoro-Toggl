@@ -499,6 +499,19 @@ export default function App() {
         </section>
       ) : (
         <>
+          {loadError && (
+            <section className="card">
+              <p className="error">Couldn't load workspaces: {loadError}</p>
+              <button
+                type="button"
+                className="primary"
+                disabled={busy}
+                onClick={connect}
+              >
+                {busy ? 'Retrying…' : 'Retry'}
+              </button>
+            </section>
+          )}
           <section className="card grid">
             <label className="field">
               <span>Workspace</span>

@@ -46,11 +46,23 @@ export interface TogglMe {
   }>
 }
 
-export function fetchMe(token: string) {
-  return togglFetch<TogglMe>(
+export async function fetchMe(token: string): Promise<TogglMe> {
+  const me = await togglFetch<TogglMe>(
     token,
     '/v9/me?with_related_data=true',
   )
+  // with_related_data doesn't always include these; fetch them directly when missing
+  const [workspaces, projects] = await Promise.all([
+    me.workspaces?.length
+      ? me.workspaces
+      : togglFetch<TogglMe['workspaces']>(token, '/v9/me/workspaces'),
+    me.projects?.length
+      ? me.projects
+      : togglFetch<TogglMe['projects']>(token, '/v9/me/projects').catch(
+          () => [],
+        ),
+  ])
+  return { ...me, workspaces: workspaces ?? [], projects: projects ?? [] }
 }
 
 export interface CreateTimeEntryBody {
